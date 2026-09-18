@@ -1,10 +1,10 @@
+cat << 'EOF' > app.py
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
 
 st.set_page_config(layout="wide")
 
-# Formal Academic Title & Custom Student Description Only
 st.title("Series Ag-Rover Run Time Simulation")
 st.write(
     "A predictive sizing and simulation model developed by electrical and mechanical engineering "
@@ -26,6 +26,25 @@ soil_coeff = st.sidebar.number_input(label="Soil Rolling Resistance (C_rr)", min
 slope_deg = st.sidebar.number_input(label="Field Slope Incline (Degrees)", min_value=0.0, max_value=30.0, value=2.0, step=0.5)
 speed = st.sidebar.number_input(label="Target Travel Speed (m/s)", min_value=0.1, max_value=10.0, value=1.5, step=0.1)
 
+# New Motor Configuration Selectors
+st.sidebar.header("Motor Architecture")
+motor_type = st.sidebar.selectbox(
+    label="Electric Motor Technology Type",
+    options=["Permanent Magnet (BLDC/PMSM)", "AC Induction Motor", "Brushed DC Motor"],
+    help="Brushless options yield highest efficiency. AC Induction provides high durability at lower costs."
+)
+
+# Automatically shift the simulation efficiency variable based on the EE motor selection profile
+if motor_type == "Permanent Magnet (BLDC/PMSM)":
+    motor_efficiency = 0.88
+    motor_notes = "High torque density and efficiency. Best choice for autonomous rovers, though hardware cost is higher."
+elif motor_type == "AC Induction Motor":
+    motor_efficiency = 0.80
+    motor_notes = "Extremely rugged and maintenance-free in dusty field mud. Suffers from minor induction slip losses."
+else:
+    motor_efficiency = 0.70
+    motor_notes = "Low component cost, but friction brushes degrade and require manual replacement. Poor energy efficiency."
+
 # --- ADVANCED ENGINEERING PHYSICS ENGINE ---
 est_battery_weight = battery_capacity / 100.0
 total_structural_mass = base_weight + internal_cargo + est_battery_weight
@@ -40,7 +59,14 @@ slope_rad = np.radians(slope_deg)
 # Baseline calculations for the current user configuration (at 0 added towed load)
 baseline_f_roll = total_structural_mass * 9.81 * soil_coeff * np.cos(slope_rad)
 baseline_f_grade = total_structural_mass * 9.81 * np.sin(slope_rad)
-baseline_demand = (((baseline_f_roll + baseline_f_grade) * speed) / 0.88) + 150
+baseline_demand = (((baseline_f_roll + baseline_f_grade) * speed) / motor_efficiency) + 150
+
+# Track peak requirements at the absolute maximum 1500 kg implement pulling limit
+max_moving_mass = total_structural_mass + 1500.0
+max_f_roll = max_moving_mass * 9.81 * soil_coeff * np.cos(slope_rad)
+max_f_grade = max_moving_mass * 9.81 * np.sin(slope_rad)
+peak_mechanical_watts = (max_f_roll + max_f_grade) * speed
+peak_horsepower = peak_mechanical_watts / 745.7
 
 for load in towing_loads:
     total_moving_mass = total_structural_mass + load
@@ -49,7 +75,7 @@ for load in towing_loads:
     tractive_force = f_rolling + f_grade
     
     mechanical_power = tractive_force * speed
-    electrical_demand = (mechanical_power / 0.88) + 150  
+    electrical_demand = (mechanical_power / motor_efficiency) + 150  
     
     hours_elec = usable_battery / electrical_demand
     electric_runtimes.append(hours_elec)
@@ -123,6 +149,21 @@ rover_blueprint = f"""
 """
 st.components.v1.html(rover_blueprint, height=250)
 
+# --- NEW AUTOMATED MOTOR RECOMMENDATION PANEL ---
+st.subheader("📋 Automated Hardware Design Recommendations")
+rec_col1, rec_col2 = st.columns(2)
+
+with rec_col1:
+    st.info(f"**Selected Architecture Profile:** {motor_type}\n\n*Engineering Context:* {motor_notes}")
+
+with rec_col2:
+    st.warning(
+        f"**Calculated Peak Traction Requirement (At 1500 kg load limit):**\n\n"
+        f"* Minimum Total Power: **{peak_mechanical_watts:.1f} Watts**\n"
+        f"* Minimum Total Horsepower: **{peak_horsepower:.2f} HP**\n\n"
+        f"*Sizing Guide:* If building a 4WD rover, next semester's team must source 4 distinct motors rated for at least **{(peak_mechanical_watts/4.0):.0f} Watts** each."
+    )
+
 # --- LIVE DATA DISPLAY CARDS ---
 st.subheader("Instant System Breakdown")
 col1, col2, col3 = st.columns(3)
@@ -149,3 +190,4 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 st.plotly_chart(fig, use_container_width=True)
+EOF
