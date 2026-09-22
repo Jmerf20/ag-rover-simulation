@@ -146,8 +146,50 @@ for payload_lbs in simulated_payload_loads_lbs:
 # Power Distribution Bus Evaluation
 if generator_watts >= baseline_demand:
     hybrid_card_status = "Net Charging [Positive Bus Buffer]"
+    bat_glow = "#00FF66"
+    status_text = "SYSTEM GENERATOR STATE STABLE"
 else:
     hybrid_card_status = "Net Discharging [Deficit Draw]"
+    bat_glow = "#FF3333"
+    status_text = "BATTERY NET DEFICIT DRAW ACTIVE"
+
+# --- DYNAMIC COLOR MECHANICAL OVERHEAD LOGIC ---
+stress_percentage = min(baseline_demand / 1000.0, 1.0)
+motor_red = int(26 + (220 - 26) * stress_percentage)
+motor_green = int(32 + (40 - 32) * stress_percentage)
+motor_blue = int(44 + (40 - 44) * stress_percentage)
+motor_color = f"rgb({motor_red}, {motor_green}, {motor_blue})"
+
+# --- NATIVE GRAPHICAL ROVER DIAGRAM ---
+st.markdown("### Real-Time System Load Telemetry")
+
+rover_blueprint = f"""
+<div style="text-align: center; background-color: #1a202c; padding: 25px; border-radius: 12px; border: 2px solid #2d3748; margin-bottom: 25px;">
+    <div style="color: #a0aec0; font-family: sans-serif; font-size: 12px; margin-bottom: 10px; font-weight: bold; letter-spacing: 1px;">
+        STATUS: <span style="color: {bat_glow};">{status_text}</span> | POWER BUS DRAW: {baseline_demand:.1f} W
+    </div>
+    <svg width="550" height="180" viewBox="0 0 550 180" xmlns="http://w3.org">
+        <line x1="20" y1="150" x2="530" y2="150" stroke="#4a5568" stroke-width="4" stroke-dasharray="5,5"/>
+        <path d="M 50 115 L 120 115" stroke="#718096" stroke-width="6" stroke-linecap="round"/>
+        <rect x="15" y="100" width="40" height="40" rx="3" fill="#4a5568" stroke="#2d3748" stroke-width="2"/>
+        <text x="18" y="88" font-family="sans-serif" font-size="8" fill="#a0aec0" font-weight="bold">LOAD SLED</text>
+        <rect x="120" y="60" width="280" height="65" rx="8" fill="#2d3748" stroke="#4a5568" stroke-width="3"/>
+        <rect x="135" y="45" width="100" height="18" rx="4" fill="#cbd5e0" stroke="#718096" stroke-width="2"/>
+        <text x="138" y="57" font-family="sans-serif" font-size="8" fill="#1a202c" font-weight="bold">HYBRID GEN: {generator_watts:.0f}W</text>
+        <rect x="250" y="45" width="135" height="18" rx="4" fill="#2b6cb0" stroke="{bat_glow}" stroke-width="2.5"/>
+        <text x="256" y="57" font-family="sans-serif" font-size="8" fill="white" font-weight="bold">LiFePO4: {battery_capacity:.0f}Wh ({pack_voltage:.0f}V)</text>
+        <circle cx="170" cy="125" r="26" fill="{motor_color}" stroke="#718096" stroke-width="3"/>
+        <circle cx="170" cy="125" r="8" fill="#cbd5e0"/>
+        <circle cx="350" cy="125" r="26" fill="{motor_color}" stroke="#718096" stroke-width="3"/>
+        <circle cx="350" cy="125" r="8" fill="#cbd5e0"/>
+        <text x="145" y="170" font-family="sans-serif" font-size="10" fill="#a0aec0" font-weight="bold">M_Front</text>
+        <text x="330" y="170" font-family="sans-serif" font-size="10" fill="#a0aec0" font-weight="bold">M_Rear</text>
+        <path d="M 430 90 L 480 90 M 465 80 L 480 90 L 465 100" stroke="{bat_glow}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="432" y="73" font-family="sans-serif" font-size="10" fill="#cbd5e0" font-weight="bold">v = {speed:.1f} m/s</text>
+    </svg>
+</div>
+"""
+st.components.v1.html(rover_blueprint, height=250)
 
 # --- HARDWARE SIZING RECAP ---
 st.subheader("Automated Hardware Sizing Recommendations")
@@ -156,10 +198,10 @@ rec_col1, rec_col2 = st.columns(2)
 with rec_col1:
     st.info(
         f"**Battery Architecture Selection Summary:**\n\n"
-        f"* Selected Bank Energy: **{battery_capacity:.0f} Wh**\n"
-        f"* Nominal Operating Bus: **{pack_voltage:.0f} V** | Capacity: **{pack_ah:.0f} Ah**\n"
-        f"* Safe Usable Energy Target (80% DoD): **{usable_battery:.0f} Wh**\n"
-        f"* Internal Arrangement: **{series_cells}S** Cell Stack\n\n"
+        f"* Selected Bank Energy: {battery_capacity:.0f} Wh\n"
+        f"* Nominal Operating Bus: {pack_voltage:.0f} V | Capacity: {pack_ah:.0f} Ah\n"
+        f"* Safe Usable Energy Target (80% DoD): {usable_battery:.0f} Wh\n"
+        f"* Internal Arrangement: {series_cells}S Cell Stack\n\n"
         f"**Design Guidance:** {battery_suggestion}"
     )
 
@@ -197,3 +239,4 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 st.plotly_chart(fig, use_container_width=True)
+
