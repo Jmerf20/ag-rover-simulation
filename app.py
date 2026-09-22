@@ -1,18 +1,19 @@
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
+import pandas as pd
 
 st.set_page_config(layout="wide")
 
 # --- FORMAL ACADEMIC TITLE ---
-st.title("Series Ag-Rover Run Time Simulation")
+st.title("Advanced Series Ag-Rover Transient Sizing & Mission Simulation")
 st.write(
-    "A custom predictive sizing model developed by electrical and mechanical engineering students "
-    "to analyze power bus states, drivetrain efficiencies, and runtime under compact vehicle constraints."
+    "A high-fidelity time-stepping predictive model analyzing transient power bus dynamics, "
+    "internal resistance (I²R) losses, transmission friction anomalies, and ICE fuel burn profiles over operational timelines."
 )
 
 # --- SIDEBAR CONFIGURATION INPUTS ---
-st.sidebar.header("Weight Specifications")
+st.sidebar.header("⚖️ Mechanical Weight Sizing")
 frame_weight = st.sidebar.number_input(
     label="Aluminum Frame Weight (lbs)", 
     min_value=5.0, max_value=150.0, value=40.0, step=5.0,
@@ -24,219 +25,264 @@ components_weight = st.sidebar.number_input(
     help="Weight of the traction motors, electronics, and enclosures."
 )
 
+st.sidebar.header("⚙️ Drivetrain Architecture")
+transmission_efficiency = st.sidebar.slider(
+    label="Gearbox/Transmission Efficiency (η_gear)",
+    min_value=0.70, max_value=1.00, value=0.92, step=0.01,
+    help="Accounts for mechanical friction losses in gear meshing and bearings before reaching wheels."
+)
+
+# --- EE ADVANCED INPUTS ---
+st.sidebar.header("⚡ Electrical Systems (EE Focus)")
+wire_gauge = st.sidebar.selectbox(
+    label="Wiring Harness Cable Gauge (AWG)",
+    options=["10 AWG (Thick - 1.0 mΩ/ft)", "12 AWG (Standard - 1.6 mΩ/ft)", "14 AWG (Thin - 2.5 mΩ/ft)"]
+)
+wire_length = st.sidebar.slider(
+    label="Total Cable Loop Run Length (Feet)",
+    min_value=2.0, max_value=30.0, value=12.0, step=1.0,
+    help="Total length of wiring harness copper path carrying heavy motor current."
+)
+
+# Allocate wire resistance values per foot based on physics standards
+if "10 AWG" in wire_gauge:
+    r_wire_per_foot = 0.000998
+elif "12 AWG" in wire_gauge:
+    r_wire_per_foot = 0.001588
+else:
+    r_wire_per_foot = 0.002525
+total_wire_resistance = r_wire_per_foot * wire_length
+
 # --- LIGHTWEIGHT ROBOTICS BATTERY SELECTION MATRIX ---
-st.sidebar.header("Compact Battery Options")
+st.sidebar.header("🔋 Compact Battery & Internal Resistance")
 battery_option = st.sidebar.selectbox(
     label="Select Robotics LiFePO4 Configuration",
     options=[
-        "12V 10Ah - Ultra-Compact Pack (3.2 lbs)",
-        "12V 20Ah - Standard Robotic Pack (5.5 lbs)",
-        "24V 10Ah - High-Voltage Slim Pack (6.4 lbs)",
-        "24V 20Ah - Max Endurance Pack (11.2 lbs)"
+        "12V 10Ah - Ultra-Compact Pack (R_int: 30 mΩ)",
+        "12V 20Ah - Standard Robotic Pack (R_int: 18 mΩ)",
+        "24V 10Ah - High-Voltage Slim Pack (R_int: 24 mΩ)",
+        "24V 20Ah - Max Endurance Pack (R_int: 12 mΩ)"
     ]
 )
 
-# Extracting physical parameters from hardware option selection
-if battery_option == "12V 10Ah - Ultra-Compact Pack (3.2 lbs)":
+# Extracting electrical physical parameters + internal resistance properties
+if "12V 10Ah" in battery_option:
     pack_voltage = 12.0
     pack_ah = 10.0
     battery_weight_lbs = 3.2
-    battery_suggestion = "Lightest profile. Optimizes vehicle agility for low-speed navigation tracks."
-elif battery_option == "12V 20Ah - Standard Robotic Pack (5.5 lbs)":
+    r_internal = 0.030 
+elif "12V 20Ah" in battery_option:
     pack_voltage = 12.0
     pack_ah = 20.0
     battery_weight_lbs = 5.5
-    battery_suggestion = "Standard baseline robotics footprint. Balanced weight-to-energy density ratio."
-elif battery_option == "24V 10Ah - High-Voltage Slim Pack (6.4 lbs)":
+    r_internal = 0.018
+elif "24V 10Ah" in battery_option:
     pack_voltage = 24.0
     pack_ah = 10.0
     battery_weight_lbs = 6.4
-    battery_suggestion = "Higher voltage bus limits system copper losses and reduces internal thermal generation."
+    r_internal = 0.024
 else:
     pack_voltage = 24.0
     pack_ah = 20.0
     battery_weight_lbs = 11.2
-    battery_suggestion = "Maximum stored energy capability within the structural design weight budget."
+    r_internal = 0.012
 
-battery_capacity = pack_voltage * pack_ah
-usable_battery = battery_capacity * 0.80  # Hardcoded 80% safe Depth of Discharge limit
+battery_capacity_wh = pack_voltage * pack_ah
+usable_battery_wh = battery_capacity_wh * 0.80  # 80% safe Depth of Discharge (DoD) constraint
 
-st.sidebar.header("Electrical Generation")
+st.sidebar.header("⛽ Hybrid Energy Node")
 generator_watts = st.sidebar.number_input(
     label="ICE Generator Output (Watts)", 
     min_value=0.0, max_value=2000.0, value=350.0, step=25.0,
-    help="Continuous power generation capability of the small hybrid unit."
+    help="Continuous power output capability of the hybrid IC engine module."
 )
+fuel_tank_liters = st.sidebar.number_input(
+    label="Fuel Tank Capacity (Liters)",
+    min_value=0.5, max_value=10.0, value=2.0, step=0.5,
+    help="Volume of gasoline payload capacity onboard."
+)
+fuel_weight_lbs = fuel_tank_liters * 1.63  # Fuel mass conversion scaling dynamically (approx 1.63 lbs per liter)
 
-st.sidebar.header("Environment & Mission")
-soil_coeff = st.sidebar.number_input(label="Soil Rolling Resistance (C_rr)", min_value=0.01, max_value=0.30, value=0.06, step=0.01)
-slope_deg = st.sidebar.number_input(label="Field Slope Incline (Degrees)", min_value=0.0, max_value=30.0, value=1.0, step=0.5)
-speed = st.sidebar.number_input(label="Target Travel Speed (m/s)", min_value=0.1, max_value=3.0, value=1.0, step=0.1)
+st.sidebar.header("🏁 Mission Parameters")
+simulation_minutes = st.sidebar.slider("Total Mission Sim Duration (Minutes)", 10, 180, 60, 5)
 
-st.sidebar.header("Motor Architecture")
+# --- MOTOR ARCHITECTURE ---
+st.sidebar.header("⚙️ Motor Parameters")
 motor_type = st.sidebar.selectbox(
     label="Electric Motor Technology Type",
     options=["Permanent Magnet (BLDC/PMSM)", "AC Induction Motor", "Brushed DC Motor"]
 )
 
-# Motor constant allocation filters
 if motor_type == "Permanent Magnet (BLDC/PMSM)":
     motor_efficiency = 0.88
-    motor_notes = "High efficiency. Best choice for small, power-limited robotic rovers."
 elif motor_type == "AC Induction Motor":
     motor_efficiency = 0.80
-    motor_notes = "Rugged design profile, though internal slip fields lower overall runtime."
 else:
     motor_efficiency = 0.70
-    motor_notes = "Low component cost, but carbon brush friction compromises system performance."
 
-# --- SYSTEM MASS & PHYSICS MATRIC CONVERSIONS ---
-total_rover_dry_weight_lbs = frame_weight + components_weight + battery_weight_lbs
-total_rover_dry_mass_kg = total_rover_dry_weight_lbs * 0.45359237
-series_cells = int(np.ceil(pack_voltage / 3.2))
+# --- DYNAMIC MULTI-PHASE FIELD MISSION TIMELINE CREATOR ---
+st.subheader("🛠️ Step 1: Design the Field Mission Profile Timeline")
+st.write("Divide your timeline into three chronological segments to observe how varying soil and slope spikes deplete the electrical bus.")
 
-# --- DESIGN ENVELOPE MONITOR ---
-st.subheader("Structural Design Envelope Monitor")
-if total_rover_dry_weight_lbs > 175.0:
-    st.error(f"CRITICAL DESIGN ERROR: Total vehicle weight ({total_rover_dry_weight_lbs:.1f} lbs) exceeds maximum assignment specification limit of 175.0 lbs!")
-elif total_rover_dry_weight_lbs > 150.0:
-    st.warning(f"DESIGN WARNING: Total vehicle weight ({total_rover_dry_weight_lbs:.1f} lbs) has climbed above your optimal target weight of 150.0 lbs.")
+m_col1, m_col2, m_col3 = st.columns(3)
+with m_col1:
+    st.markdown("**Phase A (First 33% of time)**")
+    cr_A = st.slider("Soil Resistance A (C_rr)", 0.02, 0.25, 0.05, 0.01, key="cra")
+    slope_A = st.slider("Slope A (Degrees)", 0.0, 20.0, 1.0, 0.5, key="sla")
+    speed_A = st.slider("Speed A (m/s)", 0.2, 3.0, 1.2, 0.1, key="spa")
+with m_col2:
+    st.markdown("**Phase B (Middle 33% of time)**")
+    cr_B = st.slider("Soil Resistance B (C_rr)", 0.02, 0.25, 0.14, 0.01, key="crb")
+    slope_B = st.slider("Slope B (Degrees)", 0.0, 20.0, 6.0, 0.5, key="slb")
+    speed_B = st.slider("Speed B (m/s)", 0.2, 3.0, 0.8, 0.1, key="spb")
+with m_col3:
+    st.markdown("**Phase C (Final 34% of time)**")
+    cr_C = st.slider("Soil Resistance C (C_rr)", 0.02, 0.25, 0.08, 0.01, key="crc")
+    slope_C = st.slider("Slope C (Degrees)", 0.0, 20.0, 0.0, 0.5, key="slc")
+    speed_C = st.slider("Speed C (m/s)", 0.2, 3.0, 1.5, 0.1, key="spc")
+
+# --- INITIAL SYSTEM CALCULATIONS & STRUCTURAL INTEGRATION ---
+total_rover_start_weight_lbs = frame_weight + components_weight + battery_weight_lbs + fuel_weight_lbs
+
+st.subheader("Chassis Design Envelope Evaluation")
+if total_rover_start_weight_lbs > 175.0:
+    st.error(f"❌ CRITICAL STRUCTURAL FAULT: Total initial weight ({total_rover_start_weight_lbs:.1f} lbs) violates constraints (> 175 lbs limit)!")
 else:
-    st.success(f"DESIGN OPTIMAL: Total vehicle dry weight is standing cleanly at {total_rover_dry_weight_lbs:.1f} lbs (Within the 150.0 lbs project target timeline).")
+    st.success(f"✅ STRUCTURAL SAFE: Total gross launch weight optimized at {total_rover_start_weight_lbs:.1f} lbs.")
 
-# Sweeping internal added payload mass variations purely in pounds
-simulated_payload_loads_lbs = np.arange(0, 101, 5) 
-electric_runtimes = []
-hybrid_runtimes = []
+# --- TRANSIENT TIME-SERIES SIMULATION ENGINE ENGINE ---
+time_steps = np.arange(0, simulation_minutes + 1, 1)
 
-slope_rad = np.radians(slope_deg)
+# Allocation arrays tracking transient arrays
+battery_soc_history = []
+fuel_remaining_liters = []
+power_demand_history = []
+copper_loss_history = []
+voltage_sag_history = []
 
-# Baseline evaluation metrics (0 lbs added internal payload)
-baseline_f_roll = total_rover_dry_mass_kg * 9.81 * soil_coeff * np.cos(slope_rad)
-baseline_f_grade = total_rover_dry_mass_kg * 9.81 * np.sin(slope_rad)
-baseline_demand = (((baseline_f_roll + baseline_f_grade) * speed) / motor_efficiency) + 20  # 20W overhead computing draw
+# State initializations
+current_battery_wh = usable_battery_wh
+current_fuel_liters = fuel_tank_liters
+bsfc_g_kwh = 380.0  # Brake Specific Fuel Consumption index baseline constant
 
-# Peak calculations at max 100 lbs internal carrying limits
-max_total_mass_kg = (total_rover_dry_weight_lbs + 100.0) * 0.45359237
-max_f_roll = max_total_mass_kg * 9.81 * soil_coeff * np.cos(slope_rad)
-max_f_grade = max_total_mass_kg * 9.81 * np.sin(slope_rad)
-peak_mechanical_watts = (max_f_roll + max_f_grade) * speed
-peak_horsepower = peak_mechanical_watts / 745.7
-
-for payload_lbs in simulated_payload_loads_lbs:
-    total_moving_mass_kg = (total_rover_dry_weight_lbs + payload_lbs) * 0.45359237
-    f_rolling = total_moving_mass_kg * 9.81 * soil_coeff * np.cos(slope_rad)
-    f_grade = total_moving_mass_kg * 9.81 * np.sin(slope_rad)
-    tractive_force = f_rolling + f_grade
-    
-    mechanical_power = tractive_force * speed
-    electrical_demand = (mechanical_power / motor_efficiency) + 20
-    
-    # Pure Battery Sizing Runtime
-    hours_elec = usable_battery / electrical_demand
-    electric_runtimes.append(hours_elec)
-    
-    # Series Hybrid Node Sizing Runtime
-    if generator_watts >= electrical_demand:
-        hours_hybrid = 24.0
+for t in time_steps:
+    # 1. Determine local environmental profile slice based on current timestep fraction
+    if t <= (simulation_minutes * 0.33):
+        c_rr = cr_A
+        slope_deg = slope_A
+        speed = speed_A
+    elif t <= (simulation_minutes * 0.66):
+        c_rr = cr_B
+        slope_deg = slope_B
+        speed = speed_B
     else:
-        hours_hybrid = usable_battery / (electrical_demand - generator_watts)
-    hybrid_runtimes.append(hours_hybrid)
+        c_rr = cr_C
+        slope_deg = slope_C
+        speed = speed_C
+        
+    # Recalculate changing real-time structural payload mass as fuel gets consumed
+    current_fuel_weight_lbs = current_fuel_liters * 1.63
+    total_inst_weight_lbs = frame_weight + components_weight + battery_weight_lbs + current_fuel_weight_lbs
+    total_inst_mass_kg = total_inst_weight_lbs * 0.45359237
+    
+    # 2. Physics Tractive System Forces
+    slope_rad = np.radians(slope_deg)
+    f_roll = total_inst_mass_kg * 9.81 * c_rr * np.cos(slope_rad)
+    f_grade = total_inst_mass_kg * 9.81 * np.sin(slope_rad)
+    tractive_force = f_roll + f_grade
+    
+    # 3. Apply Multi-Stage Powertrain Efficiencies (Transmission + Electrical)
+    mechanical_power_wheels = tractive_force * speed
+    electrical_power_demand = (mechanical_power_wheels / (motor_efficiency * transmission_efficiency)) + 20.0
+    
+    # 4. Advanced Circuit EE Calculations (Ohmic Loss & Voltage Drop)
+    # Estimate standard working current based on power bus state variables
+    approx_current = electrical_power_demand / pack_voltage
+    
+    # Calculate Copper Wiring Wire Losses and Battery Chemical Voltage Sag Drop
+    wire_power_loss = (approx_current ** 2) * total_wire_resistance
+    voltage_sag = approx_current * r_internal
+    
+    # Compound total demand reflecting non-ideal thermodynamic losses
+    final_gross_power_demand = electrical_power_demand + wire_power_loss
+    
+    # 5. Hybrid Node Sizing Logic Flow Check
+    if current_fuel_liters > 0 and generator_watts > 0:
+        # Engine turns over: generates power, consumes localized gasoline reserves
+        fuel_burn_g_per_min = (generator_watts / 1000.0) * bsfc_g_kwh / 60.0
+        fuel_burn_liters_per_min = fuel_burn_g_per_min / 740.0 # Gas density conversion tracking metric
+        current_fuel_liters = max(current_fuel_liters - fuel_burn_liters_per_min, 0.0)
+        active_gen_watts = generator_watts
+    else:
+        active_gen_watts = 0.0 # Empty tank or engine generator hard-killed
+        
+    # Power Bus Balancing Node
+    net_power_flow = active_gen_watts - final_gross_power_demand
+    
+    # Integrate energy change into battery storage array bank minute by minute
+    energy_change_wh = (net_power_flow * (1.0 / 60.0))
+    current_battery_wh = current_battery_wh + energy_change_wh
+    
+    # Clamp capacity variables bounds cleanly
+    current_battery_wh = min(max(current_battery_wh, 0.0), usable_battery_wh)
+    soc_percentage = (current_battery_wh / usable_battery_wh) * 100.0
+    
+    # Append state telemetry for downstream visualization processing
+    battery_soc_history.append(soc_percentage)
+    fuel_remaining_liters.append(current_fuel_liters)
+    power_demand_history.append(final_gross_power_demand)
+    copper_loss_history.append(wire_power_loss)
+    voltage_sag_history.append(voltage_sag)
 
-# Power Distribution Bus Evaluation
-if generator_watts >= baseline_demand:
-    hybrid_card_status = "Net Charging [Positive Bus Buffer]"
-    bat_glow = "#00FF66"
-    status_text = "SYSTEM GENERATOR STATE STABLE"
-else:
-    hybrid_card_status = "Net Discharging [Deficit Draw]"
-    bat_glow = "#FF3333"
-    status_text = "BATTERY NET DEFICIT DRAW ACTIVE"
+# --- VISUALIZATION DASHBOARD INTERFACES ---
+st.subheader("📈 Real-Time Transient Mission Telemetry Graphs")
 
-# --- DYNAMIC COLOR MECHANICAL OVERHEAD LOGIC ---
-stress_percentage = min(baseline_demand / 1000.0, 1.0)
-motor_red = int(26 + (220 - 26) * stress_percentage)
-motor_green = int(32 + (40 - 32) * stress_percentage)
-motor_blue = int(44 + (40 - 44) * stress_percentage)
-motor_color = f"rgb({motor_red}, {motor_green}, {motor_blue})"
+col_g1, col_g2 = st.columns(2)
 
-# --- NATIVE GRAPHICAL ROVER DIAGRAM ---
-st.markdown("### Real-Time System Load Telemetry")
-
-rover_blueprint = f"""
-<div style="text-align: center; background-color: #1a202c; padding: 25px; border-radius: 12px; border: 2px solid #2d3748; margin-bottom: 25px;">
-    <div style="color: #a0aec0; font-family: sans-serif; font-size: 12px; margin-bottom: 10px; font-weight: bold; letter-spacing: 1px;">
-        STATUS: <span style="color: {bat_glow};">{status_text}</span> | POWER BUS DRAW: {baseline_demand:.1f} W
-    </div>
-    <svg width="550" height="180" viewBox="0 0 550 180" xmlns="http://w3.org">
-        <line x1="20" y1="150" x2="530" y2="150" stroke="#4a5568" stroke-width="4" stroke-dasharray="5,5"/>
-        <path d="M 50 115 L 120 115" stroke="#718096" stroke-width="6" stroke-linecap="round"/>
-        <rect x="15" y="100" width="40" height="40" rx="3" fill="#4a5568" stroke="#2d3748" stroke-width="2"/>
-        <text x="18" y="88" font-family="sans-serif" font-size="8" fill="#a0aec0" font-weight="bold">LOAD SLED</text>
-        <rect x="120" y="60" width="280" height="65" rx="8" fill="#2d3748" stroke="#4a5568" stroke-width="3"/>
-        <rect x="135" y="45" width="100" height="18" rx="4" fill="#cbd5e0" stroke="#718096" stroke-width="2"/>
-        <text x="138" y="57" font-family="sans-serif" font-size="8" fill="#1a202c" font-weight="bold">HYBRID GEN: {generator_watts:.0f}W</text>
-        <rect x="250" y="45" width="135" height="18" rx="4" fill="#2b6cb0" stroke="{bat_glow}" stroke-width="2.5"/>
-        <text x="256" y="57" font-family="sans-serif" font-size="8" fill="white" font-weight="bold">LiFePO4: {battery_capacity:.0f}Wh ({pack_voltage:.0f}V)</text>
-        <circle cx="170" cy="125" r="26" fill="{motor_color}" stroke="#718096" stroke-width="3"/>
-        <circle cx="170" cy="125" r="8" fill="#cbd5e0"/>
-        <circle cx="350" cy="125" r="26" fill="{motor_color}" stroke="#718096" stroke-width="3"/>
-        <circle cx="350" cy="125" r="8" fill="#cbd5e0"/>
-        <text x="145" y="170" font-family="sans-serif" font-size="10" fill="#a0aec0" font-weight="bold">M_Front</text>
-        <text x="330" y="170" font-family="sans-serif" font-size="10" fill="#a0aec0" font-weight="bold">M_Rear</text>
-        <path d="M 430 90 L 480 90 M 465 80 L 480 90 L 465 100" stroke="{bat_glow}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-        <text x="432" y="73" font-family="sans-serif" font-size="10" fill="#cbd5e0" font-weight="bold">v = {speed:.1f} m/s</text>
-    </svg>
-</div>
-"""
-st.components.v1.html(rover_blueprint, height=250)
-
-# --- HARDWARE SIZING RECAP ---
-st.subheader("Automated Hardware Sizing Recommendations")
-rec_col1, rec_col2 = st.columns(2)
-
-with rec_col1:
-    st.info(
-        f"**Battery Architecture Selection Summary:**\n\n"
-        f"* Selected Bank Energy: {battery_capacity:.0f} Wh\n"
-        f"* Nominal Operating Bus: {pack_voltage:.0f} V | Capacity: {pack_ah:.0f} Ah\n"
-        f"* Safe Usable Energy Target (80% DoD): {usable_battery:.0f} Wh\n"
-        f"* Internal Arrangement: {series_cells}S Cell Stack\n\n"
-        f"**Design Guidance:** {battery_suggestion}"
+with col_g1:
+    fig_soc = go.Figure()
+        fig_soc.add_trace(go.Scatter(x=time_steps, y=[f * (100.0/fuel_tank_liters) for f in fuel_remaining_liters], name="Fuel Level (% Tank Volume)", line=dict(color='#FFA500', width=3, dash='dash')))
+    fig_soc.update_layout(
+        title="Vehicle Storage Reservoirs Depletion Over Mission Timeline",
+        xaxis_title="Simulation Time Elapsed (Minutes)",
+        yaxis_title="Remaining Capacity (%)",
+        yaxis=dict(range=[-5, 105]),
+        template="plotly_dark",
+        legend=dict(orientation="h", y=-0.2)
     )
+    st.plotly_chart(fig_soc, use_container_width=True)
 
-with rec_col2:
-    st.warning(
-        f"**Calculated Peak Traction Requirement (At 100 lbs cargo load limit):**\n\n"
-        f"* Minimum Continuous Power Required: **{peak_mechanical_watts:.1f} Watts**\n"
-        f"* Minimum Continuous Horsepower Required: **{peak_horsepower:.3f} HP**\n\n"
-        f"*Engineering Note:* If building a 4WD chassis, each motor must be individually rated for at least **{(peak_mechanical_watts/4.0):.0f} Watts** to prevent electrical winding stall conditions."
+with col_g2:
+    fig_pow = go.Figure()
+    fig_pow.add_trace(go.Scatter(x=time_steps, y=power_demand_history, name="Gross System Power Demand (W)", line=dict(color='#FF3333', width=3)))
+    fig_pow.add_trace(go.Scatter(x=time_steps, y=[generator_watts if f > 0 else 0 for f in fuel_remaining_liters], name="ICE Generator Output (W)", line=dict(color='#0068C9', width=2)))
+    fig_pow.update_layout(
+        title="Power Bus Load Matching Profile & Generation Balancing",
+        xaxis_title="Simulation Time Elapsed (Minutes)",
+        yaxis_title="Electrical Power (Watts)",
+        template="plotly_dark",
+        legend=dict(orientation="h", y=-0.2)
     )
+    st.plotly_chart(fig_pow, use_container_width=True)
 
-# --- METRIC BREAKDOWN PANEL ---
-st.subheader("Instant System Breakdown")
-col1, col2, col3 = st.columns(3)
+# --- ADVANCED METRIC DEEP-DIVE OVERVIEWS ---
+st.subheader("🔬 Component Loss & Circuit Telemetry Overview")
+c1, c2, c3, c4 = st.columns(4)
 
-with col1:
-    st.metric(label="Selected Battery Pack Weight", value=f"{battery_weight_lbs:.1f} lbs")
-    st.metric(label="Total Vehicle Dry Weight", value=f"{total_rover_dry_weight_lbs:.1f} lbs")
-with col2:
-    st.metric(label="Baseline System Demand", value=f"{baseline_demand:.1f} W")
-    st.metric(label="Usable Energy Storage Buffer", value=f"{usable_battery:.0f} Wh")
-with col3:
-    st.metric(label="Baseline Power Bus State", value=hybrid_card_status)
+with c1:
+    st.metric(label="Peak Total Power Draw", value=f"{max(power_demand_history):.1f} W")
+with c2:
+    st.metric(label="Worst-Case Cable Wire Loss", value=f"{max(copper_loss_history):.2f} W")
+with c3:
+    st.metric(label="Peak Battery Voltage Sag", value=f"{max(voltage_sag_history):.3f} V")
+with c4:
+    st.metric(label="Ending Onboard Fuel Volume", value=f"{fuel_remaining_liters[-1]:.2f} L")
 
-# --- VISUALIZATION ENGINE GENERATION ---
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=simulated_payload_loads_lbs, y=electric_runtimes, name="Pure Electric Mode (Generator Off)", line=dict(color='#FF4B4B', width=3)))
-fig.add_trace(go.Scatter(x=simulated_payload_loads_lbs, y=hybrid_runtimes, name="Series Hybrid Mode (Generator Active)", line=dict(color='#0068C9', width=3)))
-
-fig.update_layout(
-    title="System Runtime Sensitivity to Internal Added Payload Cargo",
-    xaxis_title="Added Payload Weight (lbs)",
-    yaxis_title="Continuous Runtime (Hours)",
-    yaxis=dict(range=[0, 24]),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+st.info(
+    f"**Electrical System-Level Analytical Note:** Notice how selection parameters dynamically affect electrical bounds. "
+    f"Choosing a **12V bus** configuration causes system current loops to surge, spiking copper heating losses across your "
+    f"wire run to a maximum value of **{max(copper_loss_history):.2f} Watts**. Upgrading hardware variables to a **24V topology** "
+    f"will automatically drop internal losses, improving structural range without changing base fuel payloads."
 )
-st.plotly_chart(fig, use_container_width=True)
 
+   
